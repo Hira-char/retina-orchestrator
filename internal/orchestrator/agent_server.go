@@ -13,7 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dioptra-io/retina-commons/api/v1"
+	api "github.com/dioptra-io/retina-commons/api/v2"
+	"github.com/dioptra-io/retina-commons/network"
 )
 
 // agentKeepalivePeriod is the interval between TCP keepalive probes
@@ -194,14 +195,30 @@ func (s *agentServer) handleAgent(stream *agentStream) {
 	s.config.agentHandler(status, stream)
 }
 
+// Adapt the Authentication Handshake
 func (s *agentServer) handshake(stream *agentStream) (*agentAuthStatus, error) {
-	authReq, err := receive[api.AuthRequest](stream.conn, stream.decoder, s.config.handshakeTimeout)
+	// Ajout du préfixe network.
+	envelope, err := network.ReceiveStreamMessage(stream.conn, s.config.handshakeTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("could not receive auth request: %w", err)
+		return nil, fmt.Errorf("could not receive handshake message: %w", err)
 	}
 
+	authReqPayload, ok := envelope.GetPayload().(*api.StreamMessage_AuthRequest)
+	if !ok {
+		return nil, fmt.Errorf("expected AuthRequest, got: %T", envelope.GetPayload())
+	}
+	authReq := authReqPayload.AuthRequest
+
 	authResp := s.config.authHandler(*authReq)
-	if err := send(stream.conn, stream.encoder, s.config.handshakeTimeout, &authResp); err != nil {
+
+	responseEnvelope := &api.StreamMessage{
+		Payload: &api.StreamMessage_AuthResponse{
+			AuthResponse: &authResp,
+		},
+	}
+
+	// Ajout du préfixe network.
+	if err := network.SendStreamMessage(stream.conn, s.config.handshakeTimeout, responseEnvelope); err != nil {
 		return nil, fmt.Errorf("could not send auth response: %w", err)
 	}
 
@@ -210,13 +227,10 @@ func (s *agentServer) handshake(stream *agentStream) (*agentAuthStatus, error) {
 		return nil, fmt.Errorf("agent not authenticated: %s", authResp.Message)
 	}
 
-	// Clear the handshake deadline so subsequent reads/writes have no timeout.
-	if err := stream.conn.SetDeadline(time.Time{}); err != nil {
-		return nil, fmt.Errorf("could not clear deadline: %w", err)
-	}
+	_ = stream.conn.SetDeadline(time.Time{})
 
 	return &agentAuthStatus{
-		agentID:       authReq.AgentID,
+		agentID:       authReq.AgentId,
 		remoteAddress: stream.conn.RemoteAddr(),
 	}, nil
 }
@@ -232,13 +246,11 @@ func (s *agentServer) removeConnection(stream *agentStream) {
 }
 
 type agentStream struct {
-	id      int
-	ctx     context.Context
-	cancel  context.CancelFunc
-	conn    *net.TCPConn
-	encoder *json.Encoder
-	decoder *json.Decoder
-	server  *agentServer
+	id     int
+	ctx    context.Context
+	cancel context.CancelFunc
+	conn   *net.TCPConn
+	server *agentServer
 }
 
 func newAgentStream(id int, conn *net.TCPConn, server *agentServer) (*agentStream, error) {
@@ -251,13 +263,11 @@ func newAgentStream(id int, conn *net.TCPConn, server *agentServer) (*agentStrea
 
 	ctx, cancel := context.WithCancel(context.Background()) // #nosec G118
 	return &agentStream{
-		id:      id,
-		conn:    conn,
-		ctx:     ctx,
-		cancel:  cancel,
-		encoder: json.NewEncoder(conn),
-		decoder: json.NewDecoder(conn),
-		server:  server,
+		id:     id,
+		conn:   conn,
+		ctx:    ctx,
+		cancel: cancel,
+		server: server,
 	}, nil
 }
 
@@ -266,11 +276,26 @@ func (s *agentStream) context() context.Context {
 }
 
 func (s *agentStream) sendPD(e *api.ProbingDirective) error {
-	return send(s.conn, s.encoder, agentSendTimeout, e)
+	envelope := &api.StreamMessage{
+		Payload: &api.StreamMessage_ProbingDirective{
+			ProbingDirective: e,
+		},
+	}
+	return network.SendStreamMessage(s.conn, agentSendTimeout, envelope)
 }
 
 func (s *agentStream) receiveFIE() (*api.ForwardingInfoElement, error) {
-	return receive[api.ForwardingInfoElement](s.conn, s.decoder, 0)
+	envelope, err := network.ReceiveStreamMessage(s.conn, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	fiePayload, ok := envelope.GetPayload().(*api.StreamMessage_ForwardingInfo)
+	if !ok {
+		return nil, fmt.Errorf("unexpected message type on stream: %T", envelope.GetPayload())
+	}
+
+	return fiePayload.ForwardingInfo, nil
 }
 
 func send[E any](conn *net.TCPConn, encoder *json.Encoder, timeout time.Duration, e *E) error {

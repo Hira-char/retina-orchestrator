@@ -15,7 +15,7 @@ import (
 
 	"time"
 
-	"github.com/dioptra-io/retina-commons/api/v1"
+	"github.com/dioptra-io/retina-commons/api/v2"
 )
 
 // pdState holds the scheduling state for a single ProbingDirective, including
@@ -86,11 +86,11 @@ func NewScheduler(seed uint64, issuanceRate float64, pdFile string, logger *slog
 	pdMap := make(map[uint64]*pdState, len(pds))
 	indices := make([]uint64, 0, len(pds))
 	for _, pd := range pds {
-		pdMap[pd.ProbingDirectiveID] = &pdState{
+		pdMap[pd.ProbingDirectiveId] = &pdState{
 			directive:    pd,
 			issuanceProb: 1.0,
 		}
-		indices = append(indices, pd.ProbingDirectiveID)
+		indices = append(indices, pd.ProbingDirectiveId)
 	}
 
 	randomizer, err := newRandomizer(seed, indices)
@@ -148,7 +148,7 @@ func (s *Scheduler) NextPD() *api.ProbingDirective {
 	}
 	s.metrics.PDsSkippedTotal.Inc()
 	s.logger.Debug("PD skipped",
-		slog.Uint64("pd_id", pd.directive.ProbingDirectiveID),
+		slog.Uint64("pd_id", pd.directive.ProbingDirectiveId),
 		slog.Float64("issuance_prob", issuanceProb))
 	return nil
 }
@@ -162,9 +162,9 @@ func (s *Scheduler) UpdateFromFIE(fie *api.ForwardingInfoElement) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	pd, ok := s.pdMap[fie.ProbingDirectiveID]
+	pd, ok := s.pdMap[fie.ProbingDirectiveId]
 	if !ok {
-		return fmt.Errorf("probing directive ID %d is not recognized", fie.ProbingDirectiveID)
+		return fmt.Errorf("probing directive ID %d is not recognized", fie.ProbingDirectiveId)
 	}
 
 	oldNearAddress, oldFarAddress := pd.lastHitNearAddress, pd.lastHitFarAddress
@@ -172,11 +172,11 @@ func (s *Scheduler) UpdateFromFIE(fie *api.ForwardingInfoElement) error {
 	// Last hit addresses can be nil (e.g. on probe timeout).
 	pd.lastHitNearAddress = nil
 	if fie.NearInfo != nil {
-		pd.lastHitNearAddress = fie.NearInfo.ReplyAddress
+		pd.lastHitNearAddress = net.ParseIP(fie.NearInfo.ReplyAddress)
 	}
 	pd.lastHitFarAddress = nil
 	if fie.FarInfo != nil {
-		pd.lastHitFarAddress = fie.FarInfo.ReplyAddress
+		pd.lastHitFarAddress = net.ParseIP(fie.FarInfo.ReplyAddress)
 	}
 
 	if ipKey(oldNearAddress) != ipKey(pd.lastHitNearAddress) {
@@ -224,7 +224,7 @@ func (s *Scheduler) recordImpact(address net.IP, pd *pdState) {
 		}
 		s.impactRecords[key] = record
 	}
-	record.pds[pd.directive.ProbingDirectiveID] = pd
+	record.pds[pd.directive.ProbingDirectiveId] = pd
 }
 
 // removeImpact removes the given PD from the impact record of the specified
@@ -236,7 +236,7 @@ func (s *Scheduler) removeImpact(address net.IP, pd *pdState) {
 	key := ipKey(address)
 	record, ok := s.impactRecords[key]
 	if ok {
-		delete(record.pds, pd.directive.ProbingDirectiveID)
+		delete(record.pds, pd.directive.ProbingDirectiveId)
 		if len(record.pds) == 0 {
 			delete(s.impactRecords, key)
 		}

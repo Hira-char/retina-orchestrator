@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	api "github.com/dioptra-io/retina-commons/api/v1"
+	api "github.com/dioptra-io/retina-commons/api/v2"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -43,7 +43,7 @@ func writePDFile(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("cannot create temp file: %v", err)
 	}
-	pd := api.ProbingDirective{ProbingDirectiveID: 1}
+	pd := api.ProbingDirective{ProbingDirectiveId: 1}
 	b, _ := json.Marshal(pd)
 	_, _ = f.Write(append(b, '\n'))
 	_ = f.Close()
@@ -73,20 +73,20 @@ func sendFIEs(t *testing.T, enc *json.Encoder) {
 	t.Helper()
 	// Unknown PD ID — exercises the UpdateFromFIE error log.
 	if err := enc.Encode(&api.ForwardingInfoElement{
-		ProbingDirectiveID: 999,
+		ProbingDirectiveId: 999,
 	}); err != nil {
 		t.Fatalf("cannot send unknown FIE: %v", err)
 	}
 	// Incomplete FIE (nil FarInfo) — exercises the continue branch.
 	if err := enc.Encode(&api.ForwardingInfoElement{
-		ProbingDirectiveID: 1,
+		ProbingDirectiveId: 1,
 		NearInfo:           &api.Info{},
 	}); err != nil {
 		t.Fatalf("cannot send incomplete FIE: %v", err)
 	}
 	// Complete FIE — exercises the ring buffer push.
 	if err := enc.Encode(&api.ForwardingInfoElement{
-		ProbingDirectiveID: 1,
+		ProbingDirectiveId: 1,
 		NearInfo:           &api.Info{},
 		FarInfo:            &api.Info{},
 	}); err != nil {
@@ -355,7 +355,7 @@ func TestFieStreamHandler_SendsAndStops(t *testing.T) {
 	}
 
 	fie := &api.ForwardingInfoElement{
-		ProbingDirectiveID: 1,
+		ProbingDirectiveId: 1,
 		NearInfo:           &api.Info{},
 		FarInfo:            &api.Info{},
 	}
@@ -400,7 +400,7 @@ func TestFieStreamHandler_SendFIEError(t *testing.T) {
 	}
 
 	fie := &api.ForwardingInfoElement{
-		ProbingDirectiveID: 1,
+		ProbingDirectiveId: 1,
 		NearInfo:           &api.Info{},
 		FarInfo:            &api.Info{},
 	}
@@ -467,11 +467,9 @@ func TestAgentHandler_ReceivesAndForwardsPD(t *testing.T) {
 	defer cancel()
 
 	stream := &agentStream{
-		conn:    serverConn,
-		ctx:     ctx,
-		cancel:  cancel,
-		encoder: json.NewEncoder(serverConn),
-		decoder: json.NewDecoder(serverConn),
+		conn:   serverConn,
+		ctx:    ctx,
+		cancel: cancel,
 	}
 
 	status := &agentAuthStatus{agentID: "agent-1"}
@@ -485,7 +483,7 @@ func TestAgentHandler_ReceivesAndForwardsPD(t *testing.T) {
 	// Wait for agentHandler to register its consumer before pushing.
 	time.Sleep(20 * time.Millisecond)
 
-	pd := &api.ProbingDirective{ProbingDirectiveID: 1, AgentID: "agent-1"}
+	pd := &api.ProbingDirective{ProbingDirectiveId: 1, AgentId: "agent-1"}
 	if err := o.pdQueue.TryPush("agent-1", pd); err != nil {
 		t.Fatalf("unexpected push error: %v", err)
 	}
@@ -495,8 +493,8 @@ func TestAgentHandler_ReceivesAndForwardsPD(t *testing.T) {
 	if err := json.NewDecoder(clientConn).Decode(&received); err != nil {
 		t.Fatalf("cannot decode PD: %v", err)
 	}
-	if received.ProbingDirectiveID != 1 {
-		t.Errorf("expected PD ID 1, got %d", received.ProbingDirectiveID)
+	if received.ProbingDirectiveId != 1 {
+		t.Errorf("expected PD ID 1, got %d", received.ProbingDirectiveId)
 	}
 
 	cancel()
@@ -524,11 +522,9 @@ func TestAgentHandler_ReceivesFIE(t *testing.T) {
 	defer cancel()
 
 	stream := &agentStream{
-		conn:    serverConn,
-		ctx:     ctx,
-		cancel:  cancel,
-		encoder: json.NewEncoder(serverConn),
-		decoder: json.NewDecoder(serverConn),
+		conn:   serverConn,
+		ctx:    ctx,
+		cancel: cancel,
 	}
 
 	status := &agentAuthStatus{agentID: "agent-2"}
@@ -568,11 +564,9 @@ func TestAgentHandler_SendPDError(t *testing.T) {
 	defer cancel()
 
 	stream := &agentStream{
-		conn:    serverConn,
-		ctx:     ctx,
-		cancel:  cancel,
-		encoder: json.NewEncoder(serverConn),
-		decoder: json.NewDecoder(serverConn),
+		conn:   serverConn,
+		ctx:    ctx,
+		cancel: cancel,
 	}
 
 	status := &agentAuthStatus{agentID: "agent-3"}
@@ -589,7 +583,7 @@ func TestAgentHandler_SendPDError(t *testing.T) {
 	_ = serverConn.Close()
 
 	// Push a PD — sendPD will fail on the closed connection.
-	pd := &api.ProbingDirective{ProbingDirectiveID: 1, AgentID: "agent-3"}
+	pd := &api.ProbingDirective{ProbingDirectiveId: 1, AgentId: "agent-3"}
 	_ = o.pdQueue.TryPush("agent-3", pd)
 
 	select {
@@ -669,11 +663,9 @@ func TestFilterFIE_InvalidPolicy(t *testing.T) {
 	defer cancel()
 
 	stream := &agentStream{
-		conn:    serverConn,
-		ctx:     ctx,
-		cancel:  cancel,
-		encoder: json.NewEncoder(serverConn),
-		decoder: json.NewDecoder(serverConn),
+		conn:   serverConn,
+		ctx:    ctx,
+		cancel: cancel,
 	}
 
 	status := &agentAuthStatus{agentID: "agent-filter"}
@@ -688,7 +680,7 @@ func TestFilterFIE_InvalidPolicy(t *testing.T) {
 
 	// Send a complete FIE — filterFIE will fail on the invalid policy.
 	if err := json.NewEncoder(clientConn).Encode(&api.ForwardingInfoElement{
-		ProbingDirectiveID: 1,
+		ProbingDirectiveId: 1,
 		NearInfo:           &api.Info{},
 		FarInfo:            &api.Info{},
 	}); err != nil {

@@ -15,7 +15,7 @@ import (
 
 	httpSwagger "github.com/swaggo/http-swagger"
 
-	"github.com/dioptra-io/retina-commons/api/v1"
+	api "github.com/dioptra-io/retina-commons/api/v2"
 	_ "github.com/dioptra-io/retina-orchestrator/docs"
 )
 

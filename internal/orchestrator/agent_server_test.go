@@ -3,12 +3,15 @@
 package orchestrator
 
 import (
+	"encoding/binary"
 	"encoding/json"
+	"io"
 	"net"
 	"testing"
 	"time"
 
-	api "github.com/dioptra-io/retina-commons/api/v1"
+	api "github.com/dioptra-io/retina-commons/api/v2"
+	"google.golang.org/protobuf/proto"
 )
 
 // Remaining coverage gaps are unreachable without refactoring *net.TCPConn to
@@ -95,17 +98,40 @@ func startAgentServer(t *testing.T, s *agentServer) {
 // persistent decoder. Callers that read further messages from conn must reuse
 // the returned decoder — creating a new one would re-buffer bytes already
 // consumed, silently discarding them.
-func doHandshake(t *testing.T, conn net.Conn, req api.AuthRequest) (api.AuthResponse, *json.Decoder) {
+func doHandshake(t *testing.T, conn net.Conn, req api.AuthRequest) api.AuthResponse {
 	t.Helper()
-	dec := json.NewDecoder(conn)
-	if err := json.NewEncoder(conn).Encode(req); err != nil { //nolint:gosec // G117: test helper, not a real secret
-		t.Fatalf("cannot send auth request: %v", err)
+
+	reqBytes, err := proto.Marshal(&req)
+	if err != nil {
+		t.Fatalf("cannot marshal auth request: %v", err)
 	}
+
+	lengthPrefix := make([]byte, 4)
+	binary.BigEndian.PutUint32(lengthPrefix, uint32(len(reqBytes)))
+	if _, err := conn.Write(lengthPrefix); err != nil {
+		t.Fatalf("cannot write length prefix: %v", err)
+	}
+	if _, err := conn.Write(reqBytes); err != nil {
+		t.Fatalf("cannot write auth request: %v", err)
+	}
+
+	respLengthPrefix := make([]byte, 4)
+	if _, err := io.ReadFull(conn, respLengthPrefix); err != nil {
+		t.Fatalf("cannot read auth response length: %v", err)
+	}
+	respLen := binary.BigEndian.Uint32(respLengthPrefix)
+
+	respBytes := make([]byte, respLen)
+	if _, err := io.ReadFull(conn, respBytes); err != nil {
+		t.Fatalf("cannot read auth response payload: %v", err)
+	}
+
 	var resp api.AuthResponse
-	if err := dec.Decode(&resp); err != nil {
-		t.Fatalf("cannot decode auth response: %v", err)
+	if err := proto.Unmarshal(respBytes, &resp); err != nil {
+		t.Fatalf("cannot unmarshal auth response: %v", err)
 	}
-	return resp, dec
+
+	return resp
 }
 
 // -- newAgentServer -----------------------------------------------------------
@@ -255,7 +281,7 @@ func TestClose_Timeout(t *testing.T) {
 		t.Fatalf("cannot dial: %v", err)
 	}
 	defer func() { _ = conn.Close() }()
-	doHandshake(t, conn, api.AuthRequest{AgentID: "a1"})
+	doHandshake(t, conn, api.AuthRequest{AgentId: "a1"})
 	<-started
 
 	err = s.close(time.Millisecond)
@@ -282,7 +308,7 @@ func TestHandshake_Success(t *testing.T) {
 	}
 	defer func() { _ = conn.Close() }()
 
-	resp, _ := doHandshake(t, conn, api.AuthRequest{AgentID: "agent-1", Secret: "s"})
+	resp := doHandshake(t, conn, api.AuthRequest{AgentId: "agent-1", Secret: "s"})
 	if !resp.Authenticated {
 		t.Fatalf("expected authenticated, got: %s", resp.Message)
 	}
@@ -308,7 +334,7 @@ func TestHandshake_Failure(t *testing.T) {
 	}
 	defer func() { _ = conn.Close() }()
 
-	resp, _ := doHandshake(t, conn, api.AuthRequest{AgentID: "bad", Secret: "wrong"})
+	resp := doHandshake(t, conn, api.AuthRequest{AgentId: "bad", Secret: "wrong"})
 	if resp.Authenticated {
 		t.Fatal("expected not authenticated")
 	}
@@ -344,7 +370,7 @@ func TestHandshake_DeadlineClearedAfterAuth(t *testing.T) {
 		bufferLength:     4096,
 		authHandler:      allowAll,
 		agentHandler: func(_ *agentAuthStatus, stream *agentStream) {
-			if err := stream.sendPD(&api.ProbingDirective{ProbingDirectiveID: 1}); err != nil {
+			if err := stream.sendPD(&api.ProbingDirective{ProbingDirectiveId: 1}); err != nil {
 				return
 			}
 			fie, err := stream.receiveFIE()
@@ -367,27 +393,25 @@ func TestHandshake_DeadlineClearedAfterAuth(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 
 	// Reuse the decoder from doHandshake to avoid losing buffered bytes.
-	_, dec := doHandshake(t, conn, api.AuthRequest{AgentID: "a1"})
+	_ = doHandshake(t, conn, api.AuthRequest{AgentId: "a1"})
 
 	// Read the PD immediately — the server sends it right after auth.
 	var pd api.ProbingDirective
-	if err := dec.Decode(&pd); err != nil {
-		t.Fatalf("cannot decode PD: %v", err)
-	}
+	readMessage(t, conn, &pd)
 
 	// Wait longer than handshakeTimeout before sending the FIE — if the
 	// deadline is not cleared, the server-side connection will have timed
 	// out by now and the encode below will fail.
 	time.Sleep(handshakeTimeout * 3)
 
-	if err := json.NewEncoder(conn).Encode(&api.ForwardingInfoElement{ProbingDirectiveID: 1}); err != nil {
+	if err := json.NewEncoder(conn).Encode(&api.ForwardingInfoElement{ProbingDirectiveId: 1}); err != nil {
 		t.Fatalf("connection timed out after handshake — deadline not cleared: %v", err)
 	}
 
 	select {
 	case got := <-fieCh:
-		if got.ProbingDirectiveID != 1 {
-			t.Errorf("expected FIE ID 1, got %d", got.ProbingDirectiveID)
+		if got.ProbingDirectiveId != 1 {
+			t.Errorf("expected FIE ID 1, got %d", got.ProbingDirectiveId)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("did not receive FIE — connection may have timed out")
@@ -402,7 +426,7 @@ func TestSendReceive_RoundTrip(t *testing.T) {
 	defer func() { _ = client.Close() }()
 	defer func() { _ = server.Close() }()
 
-	pd := &api.ProbingDirective{ProbingDirectiveID: 99}
+	pd := &api.ProbingDirective{ProbingDirectiveId: 99}
 	if err := send(client, json.NewEncoder(client), 0, pd); err != nil {
 		t.Fatalf("send failed: %v", err)
 	}
@@ -410,8 +434,8 @@ func TestSendReceive_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("receive failed: %v", err)
 	}
-	if got.ProbingDirectiveID != 99 {
-		t.Errorf("expected ID 99, got %d", got.ProbingDirectiveID)
+	if got.ProbingDirectiveId != 99 {
+		t.Errorf("expected ID 99, got %d", got.ProbingDirectiveId)
 	}
 }
 
@@ -421,7 +445,7 @@ func TestSendReceive_WithTimeout(t *testing.T) {
 	defer func() { _ = client.Close() }()
 	defer func() { _ = server.Close() }()
 
-	fie := &api.ForwardingInfoElement{ProbingDirectiveID: 7}
+	fie := &api.ForwardingInfoElement{ProbingDirectiveId: 7}
 	if err := send(client, json.NewEncoder(client), time.Second, fie); err != nil {
 		t.Fatalf("send with timeout failed: %v", err)
 	}
@@ -429,8 +453,8 @@ func TestSendReceive_WithTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("receive with timeout failed: %v", err)
 	}
-	if got.ProbingDirectiveID != 7 {
-		t.Errorf("expected ID 7, got %d", got.ProbingDirectiveID)
+	if got.ProbingDirectiveId != 7 {
+		t.Errorf("expected ID 7, got %d", got.ProbingDirectiveId)
 	}
 }
 
@@ -507,7 +531,7 @@ func TestAgentStream_Context(t *testing.T) {
 		t.Fatalf("cannot dial: %v", err)
 	}
 	defer func() { _ = conn.Close() }()
-	doHandshake(t, conn, api.AuthRequest{AgentID: "a1"})
+	doHandshake(t, conn, api.AuthRequest{AgentId: "a1"})
 
 	select {
 	case ok := <-ctxCh:
@@ -523,7 +547,7 @@ func TestAgentStream_SendPDReceiveFIE(t *testing.T) {
 	t.Parallel()
 	fieCh := make(chan *api.ForwardingInfoElement, 1)
 	s, addr := newTestAgentServer(t, allowAll, func(_ *agentAuthStatus, stream *agentStream) {
-		if err := stream.sendPD(&api.ProbingDirective{ProbingDirectiveID: 42}); err != nil {
+		if err := stream.sendPD(&api.ProbingDirective{ProbingDirectiveId: 42}); err != nil {
 			return
 		}
 		fie, err := stream.receiveFIE()
@@ -542,26 +566,43 @@ func TestAgentStream_SendPDReceiveFIE(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 
 	// Reuse the decoder from doHandshake to avoid re-buffering bytes already consumed.
-	_, dec := doHandshake(t, conn, api.AuthRequest{AgentID: "a1"})
+	_ = doHandshake(t, conn, api.AuthRequest{AgentId: "a1"})
 
 	var pd api.ProbingDirective
-	if err := dec.Decode(&pd); err != nil {
-		t.Fatalf("cannot decode PD: %v", err)
-	}
-	if pd.ProbingDirectiveID != 42 {
-		t.Errorf("expected PD ID 42, got %d", pd.ProbingDirectiveID)
+	readMessage(t, conn, &pd)
+	if pd.ProbingDirectiveId != 42 {
+		t.Errorf("expected PD ID 42, got %d", pd.ProbingDirectiveId)
 	}
 
-	if err := json.NewEncoder(conn).Encode(&api.ForwardingInfoElement{ProbingDirectiveID: 42}); err != nil {
+	if err := json.NewEncoder(conn).Encode(&api.ForwardingInfoElement{ProbingDirectiveId: 42}); err != nil {
 		t.Fatalf("cannot encode FIE: %v", err)
 	}
 
 	select {
 	case got := <-fieCh:
-		if got.ProbingDirectiveID != 42 {
-			t.Errorf("expected FIE ID 42, got %d", got.ProbingDirectiveID)
+		if got.ProbingDirectiveId != 42 {
+			t.Errorf("expected FIE ID 42, got %d", got.ProbingDirectiveId)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("did not receive FIE in time")
+	}
+}
+
+func readMessage(t *testing.T, conn net.Conn, msg proto.Message) {
+	t.Helper()
+
+	lengthPrefix := make([]byte, 4)
+	if _, err := io.ReadFull(conn, lengthPrefix); err != nil {
+		t.Fatalf("cannot read message length: %v", err)
+	}
+	msgLen := binary.BigEndian.Uint32(lengthPrefix)
+
+	msgBytes := make([]byte, msgLen)
+	if _, err := io.ReadFull(conn, msgBytes); err != nil {
+		t.Fatalf("cannot read message payload: %v", err)
+	}
+
+	if err := proto.Unmarshal(msgBytes, msg); err != nil {
+		t.Fatalf("cannot unmarshal message: %v", err)
 	}
 }

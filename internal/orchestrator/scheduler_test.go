@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	api "github.com/dioptra-io/retina-commons/api/v1"
+	api "github.com/dioptra-io/retina-commons/api/v2"
 )
 
 // Coverage is ~99%: the only uncovered branch is the `newRandomizer` error path
@@ -39,16 +39,16 @@ func writeSchedulerPDFile(t *testing.T, pds []*api.ProbingDirective) string {
 }
 
 func makePD(id uint64) *api.ProbingDirective {
-	return &api.ProbingDirective{ProbingDirectiveID: id}
+	return &api.ProbingDirective{ProbingDirectiveId: id}
 }
 
 func makeFIE(id uint64, near, far net.IP) *api.ForwardingInfoElement {
-	fie := &api.ForwardingInfoElement{ProbingDirectiveID: id}
+	fie := &api.ForwardingInfoElement{ProbingDirectiveId: id}
 	if near != nil {
-		fie.NearInfo = &api.Info{ReplyAddress: near}
+		fie.NearInfo = &api.Info{ReplyAddress: near.String()}
 	}
 	if far != nil {
-		fie.FarInfo = &api.Info{ReplyAddress: far}
+		fie.FarInfo = &api.Info{ReplyAddress: far.String()}
 	}
 	return fie
 }
@@ -200,8 +200,8 @@ func TestRecordImpact_NilAddressAfterNonNil(t *testing.T) {
 	// NearInfo present but ReplyAddress nil: triggers recordImpact(nil, pd),
 	// covering its nil address guard.
 	fie := &api.ForwardingInfoElement{
-		ProbingDirectiveID: 1,
-		NearInfo:           &api.Info{ReplyAddress: nil},
+		ProbingDirectiveId: 1,
+		NearInfo:           &api.Info{ReplyAddress: ""},
 	}
 	if err := s.UpdateFromFIE(fie); err != nil {
 		t.Fatalf("unexpected error: %v", err)

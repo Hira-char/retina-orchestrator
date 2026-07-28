@@ -14,7 +14,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/dioptra-io/retina-commons/api/v1"
+	"github.com/dioptra-io/retina-commons/api/v2"
 	"github.com/dioptra-io/retina-orchestrator/internal/orchestrator/structures"
 	"golang.org/x/sync/errgroup"
 )
@@ -189,12 +189,12 @@ func (o *orch) runScheduler(ctx context.Context) error {
 			continue
 		}
 
-		if err := o.pdQueue.TryPush(pd.AgentID, pd); err != nil {
+		if err := o.pdQueue.TryPush(pd.AgentId, pd); err != nil {
 			o.logger.Debug("PD dropped: no queue for agent",
-				slog.String("agent_id", pd.AgentID),
-				slog.Uint64("pd_id", pd.ProbingDirectiveID))
+				slog.String("agent_id", pd.AgentId),
+				slog.Uint64("pd_id", pd.ProbingDirectiveId))
 		} else {
-			o.metrics.AgentQueueSize.WithLabelValues(pd.AgentID).Inc()
+			o.metrics.AgentQueueSize.WithLabelValues(pd.AgentId).Inc()
 		}
 	}
 }
@@ -257,7 +257,7 @@ func (o *orch) fieStreamHandler(s *fieClient) {
 
 		o.logger.Debug("Sending FIE to client",
 			slog.Uint64("seq", seq),
-			slog.Uint64("pd_id", fie.ProbingDirectiveID))
+			slog.Uint64("pd_id", fie.ProbingDirectiveId))
 		if err = s.sendFIE(seqFIE); err != nil {
 			closeReason = "internal_error"
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -266,7 +266,7 @@ func (o *orch) fieStreamHandler(s *fieClient) {
 			return
 		}
 		o.metrics.FIEsStreamedTotal.Inc()
-		o.metrics.StreamLagSeconds.Observe(time.Since(seqFIE.ProductionTimestamp).Seconds())
+		o.metrics.StreamLagSeconds.Observe(time.Since(time.Unix(0, seqFIE.ProductionTimestampNs)).Seconds())
 	}
 }
 
@@ -298,7 +298,7 @@ func (o *orch) agentHandler(status *agentAuthStatus, s *agentStream) {
 
 			o.logger.Debug("FIE received",
 				slog.String("agent_id", status.agentID),
-				slog.Uint64("pd_id", fie.ProbingDirectiveID),
+				slog.Uint64("pd_id", fie.ProbingDirectiveId),
 				slog.Bool("complete", fie.NearInfo != nil && fie.FarInfo != nil))
 			if err := o.scheduler.UpdateFromFIE(fie); err != nil {
 				o.logger.Error("Failed to update scheduler from FIE", "agent_id", status.agentID, "err", err)
@@ -325,8 +325,8 @@ func (o *orch) agentHandler(status *agentAuthStatus, s *agentStream) {
 
 			o.logger.Debug("Sending PD to agent",
 				slog.String("agent_id", status.agentID),
-				slog.Uint64("pd_id", pd.ProbingDirectiveID),
-				slog.String("dest", pd.DestinationAddress.String()))
+				slog.Uint64("pd_id", pd.ProbingDirectiveId),
+				slog.String("dest", pd.DestinationAddress))
 			if err = s.sendPD(pd); err != nil {
 				return err
 			}
