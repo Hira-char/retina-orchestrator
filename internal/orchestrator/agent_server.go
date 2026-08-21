@@ -5,7 +5,6 @@ package orchestrator
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -36,7 +35,7 @@ type agentAuthStatus struct {
 type agentHandleFunc func(status *agentAuthStatus, s *agentStream)
 
 // authHandleFunc handles agent authentication. If Authenticated is false, the connection is closed.
-type authHandleFunc func(req api.AuthRequest) api.AuthResponse
+type authHandleFunc func(req *api.AuthRequest) *api.AuthResponse
 
 type agentServerConfig struct {
 	// address is the TCP listening address in the form "host:port".
@@ -209,11 +208,11 @@ func (s *agentServer) handshake(stream *agentStream) (*agentAuthStatus, error) {
 	}
 	authReq := authReqPayload.AuthRequest
 
-	authResp := s.config.authHandler(*authReq)
+	authResp := s.config.authHandler(authReq)
 
 	responseEnvelope := &api.StreamMessage{
 		Payload: &api.StreamMessage_AuthResponse{
-			AuthResponse: &authResp,
+			AuthResponse: authResp,
 		},
 	}
 
@@ -296,29 +295,4 @@ func (s *agentStream) receiveFIE() (*api.ForwardingInfoElement, error) {
 	}
 
 	return fiePayload.ForwardingInfo, nil
-}
-
-func send[E any](conn *net.TCPConn, encoder *json.Encoder, timeout time.Duration, e *E) error {
-	if timeout > 0 {
-		if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
-			return fmt.Errorf("send failed: cannot set write deadline: %w", err)
-		}
-	}
-	if err := encoder.Encode(e); err != nil {
-		return fmt.Errorf("send failed: cannot encode: %w", err)
-	}
-	return nil
-}
-
-func receive[E any](conn *net.TCPConn, decoder *json.Decoder, timeout time.Duration) (*E, error) {
-	var e E
-	if timeout > 0 {
-		if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
-			return nil, fmt.Errorf("receive failed: cannot set read deadline: %w", err)
-		}
-	}
-	if err := decoder.Decode(&e); err != nil {
-		return nil, fmt.Errorf("receive failed: cannot decode: %w", err)
-	}
-	return &e, nil
 }

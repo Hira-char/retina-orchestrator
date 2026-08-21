@@ -21,7 +21,7 @@ import (
 
 // SequencedFIE is a ForwardingInfoElement with a sequence number for ordered delivery to HTTP clients.
 type SequencedFIE struct {
-	api.ForwardingInfoElement
+	*api.ForwardingInfoElement
 	SequenceNumber uint64 `json:"sequence_number"`
 }
 

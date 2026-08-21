@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"testing"
 	"time"
@@ -44,7 +45,7 @@ func writePDFile(t *testing.T) string {
 		t.Fatalf("cannot create temp file: %v", err)
 	}
 	pd := api.ProbingDirective{ProbingDirectiveId: 1}
-	b, _ := json.Marshal(pd)
+	b, _ := json.Marshal(&pd)
 	_, _ = f.Write(append(b, '\n'))
 	_ = f.Close()
 	return f.Name()
@@ -69,29 +70,26 @@ func validConfig(t *testing.T) *Config {
 // sendFIEs sends a sequence of FIEs to exercise agentHandler FIE receive paths:
 // one with an unknown PD ID (UpdateFromFIE error log), one incomplete (continue
 // branch), and one complete (ring buffer push).
-func sendFIEs(t *testing.T, enc *json.Encoder) {
+func sendFIEs(t *testing.T, conn net.Conn) {
 	t.Helper()
+
 	// Unknown PD ID — exercises the UpdateFromFIE error log.
-	if err := enc.Encode(&api.ForwardingInfoElement{
+	writeMessage(t, conn, &api.ForwardingInfoElement{
 		ProbingDirectiveId: 999,
-	}); err != nil {
-		t.Fatalf("cannot send unknown FIE: %v", err)
-	}
+	})
+
 	// Incomplete FIE (nil FarInfo) — exercises the continue branch.
-	if err := enc.Encode(&api.ForwardingInfoElement{
+	writeMessage(t, conn, &api.ForwardingInfoElement{
 		ProbingDirectiveId: 1,
 		NearInfo:           &api.Info{},
-	}); err != nil {
-		t.Fatalf("cannot send incomplete FIE: %v", err)
-	}
+	})
+
 	// Complete FIE — exercises the ring buffer push.
-	if err := enc.Encode(&api.ForwardingInfoElement{
+	writeMessage(t, conn, &api.ForwardingInfoElement{
 		ProbingDirectiveId: 1,
 		NearInfo:           &api.Info{},
 		FarInfo:            &api.Info{},
-	}); err != nil {
-		t.Fatalf("cannot send complete FIE: %v", err)
-	}
+	})
 }
 
 // -- Config.Validate ----------------------------------------------------------
@@ -489,10 +487,7 @@ func TestAgentHandler_ReceivesAndForwardsPD(t *testing.T) {
 	}
 
 	var received api.ProbingDirective
-	_ = clientConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	if err := json.NewDecoder(clientConn).Decode(&received); err != nil {
-		t.Fatalf("cannot decode PD: %v", err)
-	}
+	readMessage(t, clientConn, &received)
 	if received.ProbingDirectiveId != 1 {
 		t.Errorf("expected PD ID 1, got %d", received.ProbingDirectiveId)
 	}
@@ -537,7 +532,7 @@ func TestAgentHandler_ReceivesFIE(t *testing.T) {
 
 	// Give agentHandler time to start its goroutines.
 	time.Sleep(20 * time.Millisecond)
-	sendFIEs(t, json.NewEncoder(clientConn))
+	sendFIEs(t, clientConn)
 	time.Sleep(50 * time.Millisecond)
 
 	cancel()
@@ -679,13 +674,12 @@ func TestFilterFIE_InvalidPolicy(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Send a complete FIE — filterFIE will fail on the invalid policy.
-	if err := json.NewEncoder(clientConn).Encode(&api.ForwardingInfoElement{
+	fie := &api.ForwardingInfoElement{
 		ProbingDirectiveId: 1,
 		NearInfo:           &api.Info{},
 		FarInfo:            &api.Info{},
-	}); err != nil {
-		t.Fatalf("cannot send FIE: %v", err)
 	}
+	writeMessage(t, clientConn, fie)
 
 	select {
 	case <-done:
@@ -704,7 +698,7 @@ func TestAgentAuthHandler_ValidSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	resp := o.agentAuthHandler(api.AuthRequest{Secret: "mysecret"})
+	resp := o.agentAuthHandler(&api.AuthRequest{Secret: "mysecret"})
 	if !resp.Authenticated {
 		t.Errorf("expected authenticated, got: %s", resp.Message)
 	}
@@ -718,7 +712,7 @@ func TestAgentAuthHandler_InvalidSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	resp := o.agentAuthHandler(api.AuthRequest{Secret: "wrong"})
+	resp := o.agentAuthHandler(&api.AuthRequest{Secret: "wrong"})
 	if resp.Authenticated {
 		t.Fatal("expected not authenticated")
 	}

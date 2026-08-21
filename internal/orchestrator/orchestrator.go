@@ -251,7 +251,7 @@ func (o *orch) fieStreamHandler(s *fieClient) {
 			return
 		}
 		seqFIE := &SequencedFIE{
-			ForwardingInfoElement: *fie,
+			ForwardingInfoElement: fie,
 			SequenceNumber:        seq,
 		}
 
@@ -346,15 +346,15 @@ func (o *orch) agentHandler(status *agentAuthStatus, s *agentStream) {
 	}
 }
 
-func (o *orch) agentAuthHandler(auth api.AuthRequest) api.AuthResponse {
+func (o *orch) agentAuthHandler(auth *api.AuthRequest) *api.AuthResponse {
 	if auth.Secret == o.config.Secret {
-		return api.AuthResponse{
+		return &api.AuthResponse{
 			Authenticated: true,
 			Message:       "authenticated",
 		}
 	}
 	o.logger.Warn("Agent authentication failed")
-	return api.AuthResponse{
+	return &api.AuthResponse{
 		Authenticated: false,
 		Message:       "secret is not correct",
 	}
